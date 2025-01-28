@@ -32,6 +32,14 @@ final class RmxAudioPlayer: NSObject {
 
     private var lastTrackId: String? = nil
     private var lastRate: Float? = nil
+    
+    private var commands: [String: Any] = [
+        "togglePlayPause": true,
+        "changePlaybackPosition": true,
+        "skipBackward": 15,
+        "skipForward": 30,
+    ]
+    
     override init() {
         super.init()
 
@@ -46,6 +54,9 @@ final class RmxAudioPlayer: NSObject {
     func setOptions(_ options: [String:Any]) {
         print("RmxAudioPlayer.execute=setOptions, \(options)")
         resetStreamOnPause = (options["resetStreamOnPause"] as? NSNumber)?.boolValue ?? false
+        if let commandOptions = options["commands"] {
+             commands = commandOptions as! [String : Any]
+        }
     }
 
     func initialize() {
@@ -443,13 +454,15 @@ final class RmxAudioPlayer: NSObject {
     
     @objc func rewindTrackEvent(_ event: MPRemoteCommandEvent?) -> MPRemoteCommandHandlerStatus {
         let time = getTrackCurrentTime(nil)
-        seek(to: time - 15, isCommand: true)
+        let offset = commands["skipBackward"] as? Float ?? 15
+        seek(to: time - offset, isCommand: true)
         return .success
     }
 
     @objc func fastForwardTrackEvent(_ event: MPRemoteCommandEvent?) -> MPRemoteCommandHandlerStatus {
         let time = getTrackCurrentTime(nil)
-        seek(to: time + 30, isCommand: true)
+        let offset = commands["skipForward"] as? Float ?? 30
+        seek(to: time + offset, isCommand: true)
         return .success
     }
 
@@ -457,6 +470,18 @@ final class RmxAudioPlayer: NSObject {
         seek(to: Float(event?.positionTime ?? 0.0), isCommand: true)
         return .success
     }
+   
+//    @objc func likeEvent(_ event: MPRemoteCommandEvent?) -> MPRemoteCommandHandlerStatus {
+//        print("like event", event);
+////        playPrevious(true)
+//        return .success
+//    }
+    
+//    @objc func changePlaybackRateEvent(_ event: MPRemoteCommandEvent?) -> MPRemoteCommandHandlerStatus {
+//        print("change playback rate event", event);
+////        playPrevious(true)
+//        return .success
+//    }
 
     // MARK: - notifications
 
@@ -968,21 +993,48 @@ final class RmxAudioPlayer: NSObject {
     func initializeMPCommandCenter() {
         if !commandCenterRegistered {
             let commandCenter = MPRemoteCommandCenter.shared()
-            commandCenter.playCommand.isEnabled = true
-            commandCenter.playCommand.addTarget(self, action: #selector(play(_:)))
-            commandCenter.pauseCommand.isEnabled = true
-            commandCenter.pauseCommand.addTarget(self, action: #selector(pause(_:)))
-            commandCenter.skipBackwardCommand.isEnabled = true
-            commandCenter.skipBackwardCommand.addTarget(self, action: #selector(rewindTrackEvent(_:)))
-            commandCenter.skipBackwardCommand.preferredIntervals = [15]
-            commandCenter.skipForwardCommand.isEnabled = true
-            commandCenter.skipForwardCommand.addTarget(self, action: #selector(fastForwardTrackEvent(_:)))
-            commandCenter.skipForwardCommand.preferredIntervals = [30]
-            commandCenter.togglePlayPauseCommand.isEnabled = true
-            commandCenter.togglePlayPauseCommand.addTarget(self, action: #selector(togglePlayPauseTrackEvent(_:)))
-            commandCenter.changePlaybackPositionCommand.isEnabled = true
-            commandCenter.changePlaybackPositionCommand.addTarget(self, action: #selector(changedThumbSlider(onLockScreen:)))
-
+            
+            if let time = commands["skipBackward"] as? NSNumber {
+                commandCenter.skipBackwardCommand.isEnabled = true
+                commandCenter.skipBackwardCommand.addTarget(self, action: #selector(rewindTrackEvent(_:)))
+                commandCenter.skipBackwardCommand.preferredIntervals = [time]
+            }
+            
+            if let time = commands["skipForward"] as? NSNumber {
+                commandCenter.skipForwardCommand.isEnabled = true
+                commandCenter.skipForwardCommand.addTarget(self, action: #selector(fastForwardTrackEvent(_:)))
+                commandCenter.skipForwardCommand.preferredIntervals = [time]
+            }
+            
+            if ((commands["nextTrack"] as? Bool ?? false) == true) {
+                commandCenter.nextTrackCommand.isEnabled = true
+                commandCenter.nextTrackCommand.addTarget(self, action: #selector(nextTrackEvent(_:)))
+            }
+            
+            if ((commands["previousTrack"] as? Bool ?? false) == true) {
+                commandCenter.previousTrackCommand.isEnabled = true
+                commandCenter.previousTrackCommand.addTarget(self, action: #selector(prevTrackEvent(_:)))
+            }
+            
+            if ((commands["togglePlayPause"] as? Bool ?? false) == true) {
+                commandCenter.togglePlayPauseCommand.isEnabled = true
+                commandCenter.togglePlayPauseCommand.addTarget(self, action: #selector(togglePlayPauseTrackEvent(_:)))
+            }
+            
+            if ((commands["changePlaybackPosition"]as? Bool ?? false) == true) {
+                commandCenter.changePlaybackPositionCommand.isEnabled = true
+                commandCenter.changePlaybackPositionCommand.addTarget(self, action: #selector(changedThumbSlider(onLockScreen:)))
+            }
+            
+//            if ((commands["like"]) != nil) {
+//                commandCenter.likeCommand.isEnabled = true
+//                commandCenter.likeCommand.addTarget(self, action: #selector(likeEvent(_:)))
+//            }
+//
+//            if ((commands["playbackRate"]) != nil) {
+//                commandCenter.changePlaybackRateCommand.isEnabled = true
+//                commandCenter.changePlaybackRateCommand.addTarget(self, action: #selector(changePlaybackRateEvent(_:)))
+//            }
             commandCenterRegistered = true
         }
     }
@@ -1112,15 +1164,29 @@ final class RmxAudioPlayer: NSObject {
     /// Cleanup
     func deregisterMusicControlsEventListener() {
         let commandCenter = MPRemoteCommandCenter.shared()
-        commandCenter.playCommand.removeTarget(self)
-        commandCenter.pauseCommand.removeTarget(self)
-//        commandCenter.nextTrackCommand.removeTarget(self)
-//        commandCenter.previousTrackCommand.removeTarget(self)
-        commandCenter.skipBackwardCommand.removeTarget(self)
-        commandCenter.skipForwardCommand.removeTarget(self)
-        commandCenter.togglePlayPauseCommand.removeTarget(self)
-        commandCenter.changePlaybackPositionCommand.isEnabled = false
-        commandCenter.changePlaybackPositionCommand.removeTarget(self, action: nil)
+//        commandCenter.playCommand.removeTarget(self)
+//        commandCenter.pauseCommand.removeTarget(self)
+        
+        if ((commands["skipBackward"]) != nil) {
+            commandCenter.skipBackwardCommand.removeTarget(self)
+        }
+        if ((commands["skipForward"]) != nil) {
+            commandCenter.skipForwardCommand.removeTarget(self)
+        }
+        if ((commands["togglePlayPause"] as? Bool ?? false) == true) {
+            commandCenter.togglePlayPauseCommand.removeTarget(self)
+        }
+        if ((commands["changePlaybackPosition"] as? Bool ?? false) == true) {
+            commandCenter.changePlaybackPositionCommand.removeTarget(self, action: nil)
+        }
+
+        if ((commands["nextTrack"] as? Bool ?? false) == true) {
+            commandCenter.nextTrackCommand.removeTarget(self)
+        }
+            
+        if ((commands["previousTrack"] as? Bool ?? false) == true) {
+            commandCenter.previousTrackCommand.removeTarget(self)
+        }
 
         commandCenterRegistered = false
     }
