@@ -22,7 +22,7 @@ import { validateTrack, validateTracks } from './utils';
 declare var Hls: any;
 
 export class PlaylistWeb extends WebPlugin implements PlaylistPlugin {
-    protected audio: HTMLVideoElement | undefined;
+    protected audio: HTMLAudioElement | undefined;
     protected playlistItems: AudioTrack[] = [];
     protected loop = false;
     protected options: AudioPlayerOptions = {};
@@ -96,6 +96,15 @@ export class PlaylistWeb extends WebPlugin implements PlaylistPlugin {
     async release(): Promise<void> {
         await this.pause();
         this.audio = undefined;
+        return Promise.resolve();
+    }
+
+    async create(): Promise<void> {
+        this.audio = document.createElement('audio');
+        this.audio.crossOrigin = 'anonymous';
+        this.audio.preload = 'metadata';
+        this.audio.controls = true;
+        this.audio.autoplay = false;
         return Promise.resolve();
     }
 
@@ -234,6 +243,52 @@ export class PlaylistWeb extends WebPlugin implements PlaylistPlugin {
         return Promise.reject();
     }
 
+    async setMediaSessionRemoteControlMetadata(): Promise<void> {
+        const audioTrack: AudioTrack = this.currentTrack!;
+        if(!navigator.mediaSession) {
+            console.warn('Media Session API not available');
+            return Promise.reject();
+        }
+
+        navigator.mediaSession.metadata = new MediaMetadata({
+            title: audioTrack.title,
+            artist: audioTrack.artist,
+            album: audioTrack.album,
+            artwork: [
+                { src: audioTrack.albumArt!, sizes: '96x96',   type: 'image/jpeg' },
+                { src: audioTrack.albumArt!, sizes: '128x128', type: 'image/jpeg' },
+                { src: audioTrack.albumArt!, sizes: '192x192', type: 'image/jpeg' },
+                { src: audioTrack.albumArt!, sizes: '256x256', type: 'image/jpeg' },
+                { src: audioTrack.albumArt!, sizes: '384x384', type: 'image/jpeg' },
+                { src: audioTrack.albumArt!, sizes: '512x512', type: 'image/jpeg' },
+            ]
+        });
+
+        navigator.mediaSession.setActionHandler('play', (details) => {this.mediaSessionControlsHandler(details)});
+        navigator.mediaSession.setActionHandler('pause', (details) => {this.mediaSessionControlsHandler(details)});
+        navigator.mediaSession.setActionHandler('nexttrack', (details) => {this.mediaSessionControlsHandler(details)});
+        navigator.mediaSession.setActionHandler('previoustrack', (details) => {this.mediaSessionControlsHandler(details)});
+        return Promise.resolve();
+    }
+
+    async mediaSessionControlsHandler(actionDetails: MediaSessionActionDetails): Promise<void> {
+        switch(actionDetails.action) {
+            case 'play':
+              this.play();
+              break;
+            case 'pause':
+              this.pause();
+              break;
+            case 'nexttrack':
+              this.skipForward();
+              break;
+            case 'previoustrack':
+              this.skipBack();
+              break;
+          }
+        return Promise.resolve();
+    }
+
     // register events
     /*
       private registerHlsListeners(hls: Hls, position?: number) {
@@ -260,6 +315,7 @@ export class PlaylistWeb extends WebPlugin implements PlaylistPlugin {
             this.audio?.removeEventListener('canplay', canPlayListener);
         };
         if (this.audio) {
+            this.audio.addEventListener('loadstart', () => {this.setMediaSessionRemoteControlMetadata()});
             this.audio.addEventListener('canplay', canPlayListener);
             this.audio.addEventListener('playing', () => {
                 this.updateStatus(RmxAudioStatusMessage.RMXSTATUS_PLAYING, this.getCurrentTrackStatus('playing'));
@@ -333,17 +389,10 @@ export class PlaylistWeb extends WebPlugin implements PlaylistPlugin {
         let wasPlaying = false;
         if (this.audio) {
             wasPlaying = !this.audio.paused;
-            this.audio.pause();
-            this.audio.src = '';
-            this.audio.removeAttribute('src');
-            this.audio.load();
+            await this.release();
         }
-        this.audio = document.createElement('video');
-        if (wasPlaying || forceAutoplay) {
-            this.audio.addEventListener('canplay', () => {
-                this.play();
-            });
-        }
+        await this.create();
+
         this.currentTrack = item;
         if (item.assetUrl.includes('.m3u8')) {
             await this.loadHlsJs();
@@ -360,7 +409,7 @@ export class PlaylistWeb extends WebPlugin implements PlaylistPlugin {
 
             //this.registerHlsListeners(hls, position);
         } else {
-            this.audio.src = item.assetUrl;
+            this.audio!.src = item.assetUrl;
         }
 
         await this.registerHtmlListeners(position);
@@ -368,7 +417,15 @@ export class PlaylistWeb extends WebPlugin implements PlaylistPlugin {
         this.updateStatus(RmxAudioStatusMessage.RMXSTATUS_TRACK_CHANGED, {
             currentItem: item
         })
+
+        if (wasPlaying || forceAutoplay) {
+            //this.play();
+            this.audio!.addEventListener('canplay', () => {
+                this.play();
+            });
+        }
     }
+
     protected updateStatus(msgType: RmxAudioStatusMessage, value: any, trackId?: string) {
         this.notifyListeners('status', {
             action: 'status',
