@@ -686,7 +686,8 @@ final class RmxAudioPlayer: NSObject {
             }
             updatedNowPlayingInfo![MPMediaItemPropertyPlaybackDuration] = duration ?? 0.0
             updatedNowPlayingInfo![MPNowPlayingInfoPropertyElapsedPlaybackTime] = currentTime ?? 0.0
-            updatedNowPlayingInfo![MPNowPlayingInfoPropertyPlaybackRate] = 1.0
+            updatedNowPlayingInfo![MPNowPlayingInfoPropertyPlaybackRate] = avQueuePlayer.isPlaying ? avQueuePlayer.rate : 0.0
+            updatedNowPlayingInfo![MPNowPlayingInfoPropertyDefaultPlaybackRate] = avQueuePlayer.rate
 
             MPNowPlayingInfoCenter.default().nowPlayingInfo = updatedNowPlayingInfo
         }
@@ -1009,11 +1010,15 @@ final class RmxAudioPlayer: NSObject {
             if ((commands["nextTrack"] as? Bool ?? false) == true) {
                 commandCenter.nextTrackCommand.isEnabled = true
                 commandCenter.nextTrackCommand.addTarget(self, action: #selector(nextTrackEvent(_:)))
+            } else {
+                commandCenter.nextTrackCommand.isEnabled = false
             }
-            
+
             if ((commands["previousTrack"] as? Bool ?? false) == true) {
                 commandCenter.previousTrackCommand.isEnabled = true
                 commandCenter.previousTrackCommand.addTarget(self, action: #selector(prevTrackEvent(_:)))
+            } else {
+                commandCenter.previousTrackCommand.isEnabled = false
             }
             
             if ((commands["togglePlayPause"] as? Bool ?? false) == true) {
