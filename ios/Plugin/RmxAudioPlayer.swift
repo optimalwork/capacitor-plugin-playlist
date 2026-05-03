@@ -19,6 +19,7 @@ final class RmxAudioPlayer: NSObject {
     var statusUpdater: StatusUpdater? = nil
 
     private var playbackTimeObserver: Any?
+    private var kvoObserversRegistered = false
     private var wasPlayingInterrupted = false
     private var commandCenterRegistered = false
     private var resetStreamOnPause = false
@@ -28,7 +29,7 @@ final class RmxAudioPlayer: NSObject {
     private var isWaitingToStartPlayback = false
     private var loop = false
 
-    private let avQueuePlayer = AVBidirectionalQueuePlayer(items: [])
+    let avQueuePlayer = AVBidirectionalQueuePlayer(items: [])
 
     private var lastTrackId: String? = nil
     private var lastRate: Float? = nil
@@ -63,20 +64,37 @@ final class RmxAudioPlayer: NSObject {
         print("RmxAudioPlayer.execute=initialize")
 
         avQueuePlayer.actionAtItemEnd = .advance
-        avQueuePlayer.addObserver(self, forKeyPath: "currentItem", options: .new, context: nil)
-        avQueuePlayer.addObserver(self, forKeyPath: "rate", options: .new, context: nil)
-        avQueuePlayer.addObserver(self, forKeyPath: "timeControlStatus", options: .new, context: nil)
+        // Guard against duplicate KVO registration (e.g. called more than once without a
+        // matching releaseResources() between calls — would otherwise crash with an
+        // "Cannot remove observer" or duplicate-key exception).
+        if !kvoObserversRegistered {
+            avQueuePlayer.addObserver(self, forKeyPath: "currentItem", options: .new, context: nil)
+            avQueuePlayer.addObserver(self, forKeyPath: "rate", options: .new, context: nil)
+            avQueuePlayer.addObserver(self, forKeyPath: "timeControlStatus", options: .new, context: nil)
+            kvoObserversRegistered = true
+        }
 
-        let interval = CMTimeMakeWithSeconds(Float64(1.0), preferredTimescale: Int32(Double(NSEC_PER_SEC)))
-        playbackTimeObserver = avQueuePlayer.addPeriodicTimeObserver(forInterval: interval, queue: .main, using: { [weak self] time in
-            self?.executePeriodicUpdate(time)
-        })
+        installPlaybackTimeObserverIfNeeded()
 
         onStatus(.rmxstatus_REGISTER, trackId: "INIT", param: nil)
     }
 
+    /// Re-arms the periodic time observer if it is not already installed.
+    /// Safe to call multiple times; no-ops when an observer is already active.
+    /// Must be called on the main thread.
+    private func installPlaybackTimeObserverIfNeeded() {
+        guard playbackTimeObserver == nil else { return }
+        let interval = CMTimeMakeWithSeconds(Float64(1.0), preferredTimescale: Int32(Double(NSEC_PER_SEC)))
+        playbackTimeObserver = avQueuePlayer.addPeriodicTimeObserver(forInterval: interval, queue: .main, using: { [weak self] time in
+            self?.executePeriodicUpdate(time)
+        })
+    }
+
     func setPlaylistItems(_ items: [AudioTrack], options: [String:Any]) {
         print("RmxAudioPlayer.execute=setPlaylistItems, \(options), \(items.count)")
+
+        // Re-arm the periodic observer in case it was removed by a prior releaseResources() call.
+        installPlaybackTimeObserverIfNeeded()
 
         var seekToPosition: Float = 0.0
         let retainPosition = options["retainPosition"] != nil ? (options["retainPosition"] as? Bool) ?? false : false
@@ -213,7 +231,7 @@ final class RmxAudioPlayer: NSObject {
     ///
     /// These functions don't really do anything interesting by themselves.
     func selectTrack(index: Int) throws {
-        guard index >= 0 || index < avQueuePlayer.queuedAudioTracks.count else {
+        guard index >= 0 && index < avQueuePlayer.queuedAudioTracks.count else {
             throw "Index out of Playlist bounds"
         }
         avQueuePlayer.setCurrentIndex(index)
@@ -267,6 +285,25 @@ final class RmxAudioPlayer: NSObject {
     func playCommand(_ isCommand: Bool) {
         wasPlayingInterrupted = false
         initializeMPCommandCenter()
+        // Re-arm the periodic observer if it was removed by a prior releaseResources() call.
+        installPlaybackTimeObserverIfNeeded()
+        
+        // Ensure audio session is active before playing
+        // This is critical when resuming after video player has deactivated the session
+        let audioSession = AVAudioSession.sharedInstance()
+        if !audioSession.isOtherAudioPlaying {
+            // Only reactivate if no other audio is playing
+            do {
+                try audioSession.setActive(true)
+            } catch {
+                print("Warning: Could not activate audio session: \(error.localizedDescription)")
+                // Try to reactivate with category setup
+                activateAudioSession()
+            }
+        } else {
+            // If other audio is playing, ensure our category is set correctly
+            activateAudioSession()
+        }
 
         if resetStreamOnPause,
            let currentTrack = avQueuePlayer.currentAudioTrack,
@@ -359,12 +396,11 @@ final class RmxAudioPlayer: NSObject {
         let action = "music-controls-seek-to"
         print(String(format: "%@ %.3f", action, positionTime))
 
-        if isCommand {
-            let playerItem = avQueuePlayer.currentAudioTrack
-            onStatus(.rmxstatus_SEEK, trackId: playerItem?.trackId, param: [
-                "position": NSNumber(value: positionTime)
-            ])
-        }
+        // Always fire seek event, not just for commands
+        let playerItem = avQueuePlayer.currentAudioTrack
+        onStatus(.rmxstatus_SEEK, trackId: playerItem?.trackId, param: [
+            "position": NSNumber(value: positionTime)
+        ])
     }
 
     func setVolume(_ volume: Float) {
@@ -417,6 +453,8 @@ final class RmxAudioPlayer: NSObject {
         avQueuePlayer.removeAllItems()
         wasPlayingInterrupted = false
 
+        // Clear lock screen player info when playlist is cleared
+        MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
     }
 
     // MARK: - remote control events
@@ -590,7 +628,7 @@ final class RmxAudioPlayer: NSObject {
                 guard !isReplacingItems && self.lastTrackId != playerItem?.trackId else {
                     return
                 }
-                print("observe change currentItem: lastTrackId \(self.lastTrackId) playerItem: \(playerItem?.trackId)")
+                print("observe change currentItem: lastTrackId \(self.lastTrackId ?? "nil") playerItem: \(playerItem?.trackId ?? "nil")")
                 self.lastTrackId = playerItem?.trackId
                 handleCurrentItemChanged(playerItem)
             }  else {
@@ -609,7 +647,13 @@ final class RmxAudioPlayer: NSObject {
             let trackStatus = getStatusItem(playerItem)
             print("Playback rate changed: \(String(describing: change[.newKey])), is playing: \(player?.isPlaying ?? false)")
 
-            if player?.isPlaying ?? false {
+            // Use the new rate value to determine playing/paused state.
+            // player?.isPlaying (= timeControlStatus == .playing) is false during the
+            // .waitingToPlayAtSpecifiedRate transition right after play() is called, which
+            // would emit a spurious PAUSE event and leave JS stuck in PAUSED state until the
+            // periodic PLAYBACK_POSITION event corrects it ~1 second later.
+            let newRate = change[.newKey] as? Float ?? 0
+            if newRate != 0 {
                 onStatus(.rmxstatus_PLAYING, trackId: playerItem.trackId, param: trackStatus)
             } else {
                 onStatus(.rmxstatus_PAUSE, trackId: playerItem.trackId, param: trackStatus)
@@ -747,7 +791,7 @@ final class RmxAudioPlayer: NSObject {
 
     func handleCurrentItemChanged(_ playerItem: AudioTrack?) {
         if let playerItem = playerItem {
-            print("Queue changed current item to: \(playerItem.trackId)")
+            print("Queue changed current item to: \(playerItem.trackId ?? "nil")")
             // NSLog(@"New music name: %@", ((AVURLAsset*)playerItem.asset).URL.pathComponents.lastObject);
             print("New item ID: \(playerItem.trackId ?? "")")
             print("Queue is at end: \(avQueuePlayer.isAtEnd ? "YES" : "NO")")
@@ -817,9 +861,9 @@ final class RmxAudioPlayer: NSObject {
                 // Failed. Examine AVPlayerItem.error
                 isWaitingToStartPlayback = false
                 var errorMsg = ""
-                if playerItem.error != nil {
-                    print("\(playerItem.error)")
-                    errorMsg = "Error playing audio track: \((playerItem.error as NSError?)?.localizedFailureReason ?? "")"
+                if let error = playerItem.error {
+                    print("\(error)")
+                    errorMsg = "Error playing audio track: \((error as NSError).localizedFailureReason ?? "")"
                 }
                 print("AVPlayerItemStatusFailed: \(errorMsg)")
                 let errorParam = createError(withCode: .rmxerr_DECODE, message: errorMsg)
@@ -1120,12 +1164,15 @@ final class RmxAudioPlayer: NSObject {
         options.insert(.allowBluetoothA2DP)
 
         do {
+            // Always set category first, even if session is already active
+            // This ensures we have the correct category after video player exits
             try avSession.setCategory(.playAndRecord, options: options)
         } catch {
             print("Error setting category! \(error.localizedDescription)")
         }
 
         do {
+            // Activate the session (will activate if not active, or update if already active)
             try AVAudioSession.sharedInstance().setActive(true)
         } catch {
             print("Could not activate audio session. \(error.localizedDescription)")
@@ -1205,11 +1252,56 @@ final class RmxAudioPlayer: NSObject {
         if let playbackTimeObserver = playbackTimeObserver {
             avQueuePlayer.removeTimeObserver(playbackTimeObserver)
         }
+        playbackTimeObserver = nil
+
+        // Remove the queue-level KVO observers added in initialize() so that a subsequent
+        // initialize() call does not crash with a duplicate-observer exception.
+        if kvoObserversRegistered {
+            avQueuePlayer.removeObserver(self, forKeyPath: "currentItem")
+            avQueuePlayer.removeObserver(self, forKeyPath: "rate")
+            avQueuePlayer.removeObserver(self, forKeyPath: "timeControlStatus")
+            kvoObserversRegistered = false
+        }
+
         deregisterMusicControlsEventListener()
+        // commandCenterRegistered is already reset inside deregisterMusicControlsEventListener()
 
         removeAllTracks()
 
-        playbackTimeObserver = nil
         isWaitingToStartPlayback = false
+    }
+
+    // MARK: - Epic 45 video handoff
+
+    private var lastKnownHandoffPosition: Float = 0
+
+    func prepareForVideoHandoff() {
+        pauseCommand(false)
+        // Capture position after pausing so lastKnownHandoffPosition reflects the
+        // true stopped head, not a value that may have ticked during the pause call.
+        if let track = avQueuePlayer.currentAudioTrack {
+            lastKnownHandoffPosition = getTrackCurrentTime(track)
+        } else {
+            lastKnownHandoffPosition = 0
+        }
+        do {
+            try AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
+        } catch {
+            print("prepareForVideoHandoff: setActive(false) failed: \(error.localizedDescription)")
+        }
+    }
+
+    func resumeAfterVideoHandoff(position: Float) {
+        lastKnownHandoffPosition = position
+        activateAudioSession()
+        // Reset lastTrackId so the timeControlStatus KVO guard does not suppress the PLAYING
+        // event on same-track non-index-0 resume. The guard `lastTrackId != trackId || isAtBeginning`
+        // (where isAtBeginning = currentIndex() == 0) would silently drop the PLAYING transition
+        // for any audio track at playlist index > 0, leaving JS stuck in PAUSED.
+        lastTrackId = nil
+    }
+
+    func getLastKnownPosition() -> Float {
+        lastKnownHandoffPosition
     }
 }
