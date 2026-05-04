@@ -55,7 +55,11 @@ final class RmxAudioPlayer: NSObject {
     func setOptions(_ options: [String:Any]) {
         print("RmxAudioPlayer.execute=setOptions, \(options)")
         resetStreamOnPause = (options["resetStreamOnPause"] as? NSNumber)?.boolValue ?? false
-        if let commandOptions = options["commands"] {
+        // The TS API nests notification options (including `commands`) under
+        // an `options` key (see AudioPlayerOptions.options: NotificationOptions).
+        // Older callers may also pass `commands` at the top level — support both.
+        let notificationOptions = options["options"] as? [String: Any]
+        if let commandOptions = notificationOptions?["commands"] ?? options["commands"] {
              commands = commandOptions as! [String : Any]
         }
     }
@@ -1055,6 +1059,9 @@ final class RmxAudioPlayer: NSObject {
                 commandCenter.nextTrackCommand.isEnabled = true
                 commandCenter.nextTrackCommand.addTarget(self, action: #selector(nextTrackEvent(_:)))
             } else {
+                // Drop any previously-registered target so iOS won't keep
+                // showing the next-track button on the lock screen.
+                commandCenter.nextTrackCommand.removeTarget(nil)
                 commandCenter.nextTrackCommand.isEnabled = false
             }
 
@@ -1062,6 +1069,7 @@ final class RmxAudioPlayer: NSObject {
                 commandCenter.previousTrackCommand.isEnabled = true
                 commandCenter.previousTrackCommand.addTarget(self, action: #selector(prevTrackEvent(_:)))
             } else {
+                commandCenter.previousTrackCommand.removeTarget(nil)
                 commandCenter.previousTrackCommand.isEnabled = false
             }
             
