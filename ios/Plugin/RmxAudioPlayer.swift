@@ -508,6 +508,21 @@ final class RmxAudioPlayer: NSObject {
         return .success
     }
 
+    // iOS sends `seekBackward`/`seekForward` for press-and-hold rewind/FF
+    // buttons on car head units. We treat them as discrete skips matching
+    // the skipBackward/skipForward intervals. Each hardware press fires
+    // `beginSeeking` then `endSeeking`; gate on `.beginSeeking` so one
+    // press = one skip.
+    @objc func seekBackwardEvent(_ event: MPSeekCommandEvent) -> MPRemoteCommandHandlerStatus {
+        guard event.type == .beginSeeking else { return .success }
+        return rewindTrackEvent(event)
+    }
+
+    @objc func seekForwardEvent(_ event: MPSeekCommandEvent) -> MPRemoteCommandHandlerStatus {
+        guard event.type == .beginSeeking else { return .success }
+        return fastForwardTrackEvent(event)
+    }
+
     @objc func changedThumbSlider(onLockScreen event: MPChangePlaybackPositionCommandEvent?) -> MPRemoteCommandHandlerStatus {
         seek(to: Float(event?.positionTime ?? 0.0), isCommand: true)
         return .success
@@ -1047,12 +1062,20 @@ final class RmxAudioPlayer: NSObject {
                 commandCenter.skipBackwardCommand.isEnabled = true
                 commandCenter.skipBackwardCommand.addTarget(self, action: #selector(rewindTrackEvent(_:)))
                 commandCenter.skipBackwardCommand.preferredIntervals = [time]
+                // Long-press rewind on car head units sends AVRCP REWIND,
+                // which iOS routes to seekBackwardCommand. Treat it as a
+                // discrete skip back so cars without skip-N buttons still
+                // work.
+                commandCenter.seekBackwardCommand.isEnabled = true
+                commandCenter.seekBackwardCommand.addTarget(self, action: #selector(seekBackwardEvent(_:)))
             }
-            
+
             if let time = commands["skipForward"] as? NSNumber {
                 commandCenter.skipForwardCommand.isEnabled = true
                 commandCenter.skipForwardCommand.addTarget(self, action: #selector(fastForwardTrackEvent(_:)))
                 commandCenter.skipForwardCommand.preferredIntervals = [time]
+                commandCenter.seekForwardCommand.isEnabled = true
+                commandCenter.seekForwardCommand.addTarget(self, action: #selector(seekForwardEvent(_:)))
             }
             
             if ((commands["nextTrack"] as? Bool ?? false) == true) {
