@@ -1076,6 +1076,15 @@ final class RmxAudioPlayer: NSObject {
             if ((commands["togglePlayPause"] as? Bool ?? false) == true) {
                 commandCenter.togglePlayPauseCommand.isEnabled = true
                 commandCenter.togglePlayPauseCommand.addTarget(self, action: #selector(togglePlayPauseTrackEvent(_:)))
+                // Also register discrete play/pause so AVRCP-strict clients
+                // (most car head units, CarPlay) can control playback. iOS
+                // routes Bluetooth PAUSE/PLAY to these commands;
+                // togglePlayPause is only a reliable fallback for single-
+                // button toggles (headphones, lockscreen).
+                commandCenter.playCommand.isEnabled = true
+                commandCenter.playCommand.addTarget(self, action: #selector(play(_:)))
+                commandCenter.pauseCommand.isEnabled = true
+                commandCenter.pauseCommand.addTarget(self, action: #selector(pause(_:)))
             }
             
             if ((commands["changePlaybackPosition"]as? Bool ?? false) == true) {
