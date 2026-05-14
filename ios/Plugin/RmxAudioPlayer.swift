@@ -425,16 +425,16 @@ final class RmxAudioPlayer: NSObject {
 
     func setTracks(_ tracks: [AudioTrack], startIndex: Int, startPosition: Float) {
         avQueuePlayer.removeAllTrackObservers()
-        
+
         isReplacingItems = true
         print("RmxAudioPlayer[setTracks] replacing tracks ")
         avQueuePlayer.replaceAllItems(with: tracks)
-        
+
         print("RmxAudioPlayer[setTracks] replacing finished ")
         for playerItem in tracks {
             addTrackObservers(playerItem)
         }
-        
+
         isReplacingItems = false
         print("RmxAudioPlayer[setTracks] added track observers ")
         if !avQueuePlayer.queuedAudioTracks.isEmpty {
@@ -442,7 +442,20 @@ final class RmxAudioPlayer: NSObject {
                 avQueuePlayer.setCurrentIndex(startIndex)
             }
         }
-        
+
+        // The currentItem KVO was suppressed during replaceAllItems, and
+        // setCurrentIndex is a no-op when the new index already matches
+        // (e.g. startIndex == 0 with a fresh queue). In that path nothing
+        // ever fires handleCurrentItemChanged, so lockscreen / Bluetooth /
+        // CarPlay keep showing the previous track's metadata while only
+        // the playhead advances. Force-sync now-playing info to the actual
+        // current track. Safe to call when KVO did fire too — the JS layer
+        // dedupes TRACK_CHANGED events on trackId.
+        if let current = avQueuePlayer.currentAudioTrack {
+            self.lastTrackId = current.trackId
+            handleCurrentItemChanged(current)
+        }
+
         if startPosition > 0 {
             seek(to: startPosition, isCommand: false)
         }
