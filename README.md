@@ -992,9 +992,22 @@ Options governing the overall behavior of the audio player plugin
 
 #### NotificationOptions
 
-| Prop       | Type                |
-| ---------- | ------------------- |
-| **`icon`** | <code>string</code> |
+| Prop           | Type                                                                |
+| -------------- | ------------------------------------------------------------------- |
+| **`icon`**     | <code>string</code>                                                 |
+| **`commands`** | <code><a href="#audioplayercommands">AudioPlayerCommands</a></code> |
+
+
+#### AudioPlayerCommands
+
+| Prop                         | Type                 | Description                                                                         |
+| ---------------------------- | -------------------- | ----------------------------------------------------------------------------------- |
+| **`togglePlayPause`**        | <code>boolean</code> | Determines if the togglePlayPause command is enabled.                               |
+| **`skipBackward`**           | <code>number</code>  | Determines if the skipBackward command is enabled and how much to skip backward by. |
+| **`skipForward`**            | <code>number</code>  | Determines if the skipForward command is enabled and how much to skip forward by.   |
+| **`changePlaybackPosition`** | <code>boolean</code> | Determines if the changePlaybackPosition command is enabled.                        |
+| **`nextTrack`**              | <code>boolean</code> | Determines if the nextTrack command is enabled.                                     |
+| **`previousTrack`**          | <code>boolean</code> | Determines if the previousTrack command is enabled.                                 |
 
 
 #### PlaylistOptions

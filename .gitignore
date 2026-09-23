@@ -1,6 +1,10 @@
 # node files
-dist
 node_modules
+# dist IS tracked: optimalwork-web consumes this fork straight from git
+# (yarn.lock pins a commit) and there is no `prepare` script to build it at
+# install time, so a commit without dist/ leaves the app with no JS or types.
+# Rebuild with `npm run build` and commit dist/ alongside any src change.
+!/dist
 
 # iOS files
 Pods
